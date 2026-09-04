@@ -1,0 +1,16 @@
+{
+  "id": "opss.Voice-Typing",
+  "name": "Voice-Typing",
+  "version": "1.0.0",
+  "description": "A micyou voice typing plugin",
+  "license": "Unlicense",
+  "runtime": "native",
+  "entry": "Voice-Typing",
+  "platforms": ["windows"],
+  "arches": ["x86_64"],
+  "apiVersion": 1,
+  "minHostVersion": "1.0.0",
+  "capabilities": ["config.read", "config.write"],
+  "kind": "utility",
+  "config": {}
+}
