@@ -1,14 +1,29 @@
 {
-  "id": "opss.Voice-Typing",
+  "id": "opss.voice-typing",
   "name": "Voice-Typing",
   "runtime": "native",
+  "version": "0.1.0",
   "platforms": ["windows"],
   "entry": "micyou_voice_typing",
   "capabilities": [
-    "message.receive",
     "config.read",
-    "config.write",
-    "event.emit",
-    "fs.read"
-  ]
+    "config.write"
+  ],
+  "config": {
+    "mode": "toggle"
+  },
+  "configSchema": {
+    "fields": [
+      {
+        "key": "mode",
+        "fieldType": "select",
+        "label": "触发模式 (快捷键固定为 LCtrl + LShift)",
+        "default": "toggle",
+        "options": [
+          { "value": "toggle", "label": "按键切换 (Toggle)" },
+          { "value": "push_to_talk", "label": "长按说话 (Push-to-Talk)" }
+        ]
+      }
+    ]
+  }
 }

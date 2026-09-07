@@ -1,4 +1,3 @@
-// src/audio.rs
 use windows::Win32::Media::Audio::{PlaySoundA, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
 use windows::core::PCSTR;
 
@@ -29,7 +28,7 @@ impl AudioEngine {
         let flags = SND_MEMORY | SND_ASYNC | SND_NODEFAULT;
         unsafe {
             let ptr = PCSTR::from_raw(data.as_ptr());
-            PlaySoundA(ptr, None, flags);
+            let _ = PlaySoundA(ptr, None, flags);
         }
     }
 }

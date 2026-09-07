@@ -8,13 +8,13 @@ mod ui;
 use std::ffi::{c_char, c_void};
 use std::os::raw::c_int;
 use std::sync::OnceLock;
+use std::path::Path;
 use crossbeam_channel::{unbounded, Sender};
-use log::info;
 
 #[allow(non_camel_case_types)]
 pub type mpl_result_t = c_int;
 pub const MPL_OK: mpl_result_t = 0;
-pub const MPL_ERR_BUFFER_TOO_SMALL: mpl_result_t = 12; 
+pub const MPL_ERR_BUFFER_TOO_SMALL: mpl_result_t = 12;
 
 #[allow(non_camel_case_types)]
 #[repr(C)]
@@ -42,101 +42,122 @@ pub struct mpl_plugin_info_t {
     pub id: *const c_char,
 }
 
-// 包装裸指针以满足 OnceLock 的 Send + Sync 约束
+#[allow(dead_code)]
 struct HostApiWrapper(*const mpl_host_api_t);
 unsafe impl Send for HostApiWrapper {}
 unsafe impl Sync for HostApiWrapper {}
 
+struct PluginInfoWrapper(mpl_plugin_info_t);
+unsafe impl Sync for PluginInfoWrapper {}
+
 static HOST_API: OnceLock<HostApiWrapper> = OnceLock::new();
 static MSG_TX: OnceLock<Sender<bus_parser::WdisMessage>> = OnceLock::new();
 
+static PLUGIN_INFO: PluginInfoWrapper = PluginInfoWrapper(mpl_plugin_info_t {
+    abi_version: 1,
+    api_version: 1,
+    id: c"opss.voice-typing".as_ptr(),
+});
+
+// 简化后的 panic 捕获宏，防止 Panic 跨越 FFI 边界
+macro_rules! catch_panic {
+    ($($body:tt)*) => {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            $($body)*
+        })).unwrap_or_else(|_| -1)
+    };
+}
+
 #[no_mangle]
-pub extern "C" fn micyou_plugin_info() -> mpl_plugin_info_t {
-    mpl_plugin_info_t {
-        abi_version: 1,
-        api_version: 1,
-        id: c"opss.Voice-Typing".as_ptr(),
-    }
+pub extern "C" fn micyou_plugin_info() -> *const mpl_plugin_info_t {
+    &PLUGIN_INFO.0
 }
 
 #[no_mangle]
 pub extern "C" fn micyou_plugin_init(host: *const mpl_host_api_t) -> mpl_result_t {
-    let _ = env_logger::try_init();
-    let _ = HOST_API.set(HostApiWrapper(host));
+    catch_panic! {
+        if host.is_null() { return -1; }
+        
+        let _ = HOST_API.set(HostApiWrapper(host));
+        let (msg_tx, msg_rx) = unbounded();
+        let _ = MSG_TX.set(msg_tx.clone());
 
-    let (msg_tx, msg_rx) = unbounded();
-    let _ = MSG_TX.set(msg_tx.clone());
+        let host_ref = unsafe { &*host };
+        
+        let plugin_dir = get_plugin_dir(host_ref);
+        let start_path = Path::new(&plugin_dir).join("assets/start.wav");
+        let end_path = Path::new(&plugin_dir).join("assets/end.wav");
+        
+        let start_wav = std::fs::read(&start_path).unwrap_or_default();
+        let end_wav = std::fs::read(&end_path).unwrap_or_default();
 
-    let host_ref = unsafe { &*host };
-    // 读取音频文件到内存
-    let start_wav = read_asset_file(host_ref, "assets/start.wav");
-    let end_wav = read_asset_file(host_ref, "assets/end.wav");
-    let audio_engine = audio::AudioEngine::new(start_wav, end_wav);
+        let audio_engine = audio::AudioEngine::new(start_wav, end_wav);
+        let state_machine = state_machine::TimeWindowStateMachine::new(1500); 
+        
+        let mode_str = get_config_string(host_ref, "mode").unwrap_or_else(|| "toggle".to_string());
 
-    let state_machine = state_machine::TimeWindowStateMachine::new(1500); // 1.5s grace period
-    
-    // 启动 Typer 线程
-    let sm_clone = state_machine.clone();
-    std::thread::spawn(move || {
-        typer::run_typer_worker(msg_rx, sm_clone);
-    });
+        let sm_clone = state_machine.clone();
+        std::thread::spawn(move || { typer::run_typer_worker(msg_rx, sm_clone); });
 
-    // 启动 Hotkey 线程
-    let sm_clone2 = state_machine.clone();
-    let audio_clone = audio_engine.clone();
-    hotkey::start_hotkey_thread(sm_clone2, audio_clone);
+        let sm_clone2 = state_machine.clone();
+        let audio_clone = audio_engine.clone();
+        hotkey::start_hotkey_thread(sm_clone2, audio_clone, mode_str);
 
-    // 启动 UI 线程
-    ui::start_ui_thread(state_machine);
-
-    info!("Voice-Typing Plugin Initialized");
-    MPL_OK
+        ui::start_ui_thread(state_machine);
+        MPL_OK
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn micyou_plugin_deinit() -> mpl_result_t {
-    info!("Voice-Typing Plugin Deinitialized");
-    MPL_OK
-}
+pub extern "C" fn micyou_plugin_deinit() -> mpl_result_t { MPL_OK }
 
 #[no_mangle]
 pub extern "C" fn micyou_plugin_handle_message(
-    _source: *const c_char,
-    _topic: *const c_char,
-    payload: *const u8,
-    len: u32,
+    _source: *const c_char, _topic: *const c_char, payload: *const u8, len: u32,
 ) -> mpl_result_t {
-    if payload.is_null() || len < 20 {
-        return MPL_OK;
-    }
-
+    if payload.is_null() || len < 20 { return MPL_OK; }
     let data = unsafe { std::slice::from_raw_parts(payload, len as usize) };
-    
     if let Some(msg) = bus_parser::parse_wdis_payload(data) {
-        if let Some(tx) = MSG_TX.get() {
-            let _ = tx.send(msg);
-        }
+        if let Some(tx) = MSG_TX.get() { let _ = tx.send(msg); }
     }
-    
     MPL_OK
 }
 
-fn read_asset_file(host: &mpl_host_api_t, path: &str) -> Vec<u8> {
-    let c_path = std::ffi::CString::new(path).unwrap();
+fn get_plugin_dir(host: &mpl_host_api_t) -> String {
     let mut out_size: u32 = 0;
-    
+    let mut dummy = [0u8; 1];
     unsafe {
-        if let Some(fs_read) = host.fs_read {
-            // 第一次调用获取大小
-            let res = fs_read(host.ctx, c_path.as_ptr(), std::ptr::null_mut(), &mut out_size);
-            if res == MPL_ERR_BUFFER_TOO_SMALL || out_size > 0 {
-                let mut buffer = vec![0u8; out_size as usize];
-                // 第二次调用读取数据
-                fs_read(host.ctx, c_path.as_ptr(), buffer.as_mut_ptr() as *mut c_char, &mut out_size);
-                buffer.truncate(out_size as usize);
-                return buffer;
+        if let Some(plugin_dir) = host.plugin_dir {
+            plugin_dir(host.ctx, dummy.as_mut_ptr() as *mut c_char, &mut out_size);
+            if out_size > 0 {
+                let mut buffer = vec![0u8; out_size as usize + 1]; 
+                let res2 = plugin_dir(host.ctx, buffer.as_mut_ptr() as *mut c_char, &mut out_size);
+                if res2 == MPL_OK {
+                    buffer.truncate(out_size as usize);
+                    return String::from_utf8_lossy(&buffer).to_string();
+                }
             }
         }
     }
-    Vec::new()
+    String::new()
+}
+
+fn get_config_string(host: &mpl_host_api_t, key: &str) -> Option<String> {
+    let c_key = std::ffi::CString::new(key).unwrap();
+    let mut out_size: u32 = 0;
+    let mut dummy = [0u8; 1];
+    unsafe {
+        if let Some(get_config) = host.get_config {
+            get_config(host.ctx, c_key.as_ptr(), dummy.as_mut_ptr() as *mut c_char, &mut out_size);
+            if out_size > 0 {
+                let mut buffer = vec![0u8; out_size as usize + 1];
+                let res = get_config(host.ctx, c_key.as_ptr(), buffer.as_mut_ptr() as *mut c_char, &mut out_size);
+                if res == MPL_OK {
+                    buffer.truncate(out_size as usize);
+                    return Some(String::from_utf8_lossy(&buffer).trim_matches('"').to_string());
+                }
+            }
+        }
+    }
+    None
 }
