@@ -1,0 +1,62 @@
+name: Build DLL Artifact
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  # 允许在 GitHub Actions 页面手动点击 Run workflow 触发
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # 静态链接 C 运行时，确保 DLL 在干净的系统上也能直接运行
+  RUSTFLAGS: "-C target-feature=+crt-static"
+
+jobs:
+  build-windows-dll:
+    name: Build Windows Native DLL
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install Rust toolchain (MSVC)
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: x86_64-pc-windows-msvc
+        components: rustfmt, clippy
+
+    - name: Cache Cargo dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        cache-all-crates: 'true'
+
+    - name: Run Cargo Clippy (Linting)
+      run: cargo clippy --release -- -D warnings
+      continue-on-error: true # 初期开发阶段允许 warning，不阻断构建
+
+    - name: Build Release DLL
+      run: cargo build --release --verbose
+
+    - name: Prepare Artifacts Directory
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path ./artifacts | Out-Null
+        
+        # 仅复制编译出的 DLL
+        # Rust cdylib 在 Windows 下默认将 crate-name 中的连字符(-)转为下划线(_)
+        Copy-Item -Path ./target/release/*.dll -Destination ./artifacts/ -ErrorAction SilentlyContinue
+        
+        # 打印产物清单
+        Write-Host "=== Build Artifacts ==="
+        Get-ChildItem ./artifacts/ | Format-Table Name, Length, LastWriteTime
+
+    - name: Upload DLL Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Voice-Typing-DLL-${{ github.sha }}
+        path: ./artifacts/*.dll
+        retention-days: 14 # 保留 14 天供反复下载测试
+        if-no-files-found: error
