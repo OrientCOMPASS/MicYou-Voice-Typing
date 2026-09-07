@@ -3,8 +3,17 @@
   "name": "Voice-Typing",
   "runtime": "native",
   "version": "0.1.0",
+  "description": "Windows端的语音输入法，依赖WhatdidIsay",
+  "license": "Unlicense",
   "platforms": ["windows"],
+  "arches":["x86_64"],
   "entry": "micyou_voice_typing",
+  "updateUrl": "https://micyou-dev.github.io/MicYou-Plugins/plugin/opss.voice-typing/plugin.json",
+  "downloadUrl": "https://github.com/OrientCOMPASS/MicYou-Voice-Typing/releases/download/v0.1.0/opss.voice-typing.zip",
+  "apiVersion": 1,
+  "dependencies": [
+  { "id": "opss.whatdidisay", "version": "^0.2.5", "optional": false }
+],
   "capabilities": [
     "config.read",
     "config.write"
