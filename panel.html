@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Voice-Typing</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px 20px 28px;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    color: hsl(var(--on-surface));
+    background: transparent;
+    font-size: 14px; line-height: 1.55;
+  }
+  h2 { margin: 0 0 2px; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+  .sub { color: hsl(var(--on-surface-variant)); font-size: 12px; margin-bottom: 16px; }
+  .card {
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--surface-container));
+    border-radius: 14px; padding: 14px 16px; margin-bottom: 14px;
+  }
+  .row { display: flex; align-items: center; gap: 12px; margin: 10px 0; flex-wrap: wrap; }
+  .row label { flex: none; min-width: 86px; color: hsl(var(--on-surface-variant)); }
+  button {
+    border: 1px solid hsl(var(--outline)); background: hsl(var(--surface-bright));
+    color: hsl(var(--on-surface)); padding: 8px 18px; border-radius: 999px;
+    font-size: 13.5px; cursor: pointer;
+    white-space: nowrap; flex: none;
+  }
+  button.primary { background: hsl(var(--primary)); color: hsl(var(--on-primary)); border-color: transparent; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.capturing { background: hsl(var(--error)); color: #fff; border-color: transparent; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  select {
+    background: hsl(var(--surface-bright)); color: hsl(var(--on-surface));
+    border: 1px solid hsl(var(--outline)); border-radius: 10px;
+    padding: 7px 10px; font-size: 13.5px; max-width: 260px;
+  }
+  kbd {
+    background: hsl(var(--surface-variant)); border: 1px solid hsl(var(--outline));
+    border-bottom-width: 2px; border-radius: 6px; padding: 2px 9px;
+    font-family: ui-monospace, Consolas, monospace; font-size: 12.5px;
+    white-space: nowrap; max-width: 100%; overflow-x: auto;
+  }
+  kbd.live { border-color: hsl(var(--primary)); box-shadow: 0 0 0 2px hsl(var(--primary) / .25); }
+  .hint { color: hsl(var(--on-surface-variant)); font-size: 12px; margin-top: 6px; }
+  .err {
+    display: none; margin-top: 8px; padding: 8px 12px; border-radius: 10px;
+    background: hsl(var(--error) / .1); color: hsl(var(--error)); font-size: 12.5px;
+    white-space: pre-wrap;
+  }
+  ol { margin: 6px 0 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+</style>
+</head>
+<body>
+  <h2>⌨️ Voice-Typing</h2>
+  <div class="sub" id="subTitle"></div>
+
+  <div class="card">
+    <div class="row">
+      <label id="hotkeyLabel"></label>
+      <kbd id="hotkeyVal">?</kbd>
+      <span style="flex:1"></span>
+      <button id="useBtn" class="primary" style="display:none"></button>
+      <button id="captureBtn"></button>
+    </div>
+    <div class="err" id="errBox"></div>
+    <div class="hint" id="hotkeyHint"></div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <label id="modeLabel"></label>
+      <select id="modeSel">
+        <option value="toggle" id="modeOptToggle"></option>
+        <option value="push_to_talk" id="modeOptPtt"></option>
+      </select>
+    </div>
+    <div class="hint" id="modeHint"></div>
+  </div>
+
+  <div class="card">
+    <strong id="howTitle"></strong>
+    <ol id="howList"></ol>
+    <div class="hint" id="noteHint"></div>
+  </div>
+
+<script>
+function call(api, args) {
+  return new Promise((resolve, reject) => {
+    const id = Math.random().toString(36).slice(2);
+    const onMsg = (e) => {
+      if (e.data && e.data.__micyou === 1 && e.data.id === id) {
+        window.removeEventListener('message', onMsg);
+        e.data.ok ? resolve(e.data.value) : reject(new Error(e.data.error));
+      }
+    };
+    window.addEventListener('message', onMsg);
+    window.parent.postMessage({ __micyou: 1, id, api, args: args || {} }, '*');
+  });
+}
+
+const T = {
+  'zh-CN': {
+    sub: '按下快捷键开口说话，识别文本自动输入到当前焦点输入框（依赖 WhatdidIsay 插件提供离线识别）',
+    hotkey: '触发快捷键',
+    capture: '按键捕获',
+    cancel: '取消（Esc）',
+    use: '使用此组合',
+    capturingHint: '正在捕获：按下并保持你想要的组合键（支持纯修饰键组合，如 左Ctrl+左Shift），预览确认后点「使用此组合」。',
+    hotkeyHint: '修饰键：ctrl / alt / shift / win（左右均可触发），或 lctrl / rctrl / lalt / ralt / lshift / rshift / lwin / rwin（区分左右）；主键：a-z、0-9、F1–F24、space、enter 等。规则：字母/数字/普通键作主键必须搭配修饰键；纯修饰键组合至少两个修饰键；单独主键仅支持 F1–F24。保存后立即生效，旧组合自动失效。',
+    mode: '触发模式',
+    modeToggle: '按键切换 (Toggle)',
+    modePtt: '长按说话 (Push-to-Talk)',
+    modeHint: '按键切换：按一次快捷键开始输入，再按一次结束，适合连续长句；长按说话：按住快捷键期间输入，松开即结束，适合碎片短语。修改后立即生效。',
+    how: '使用方法',
+    steps: [
+      '确保 WhatdidIsay 插件已安装并启用（本插件依赖它的转录广播）',
+      '把光标点进目标输入框（任意应用）',
+      '按下快捷键开始说话，光标旁会出现红色麦克风标记',
+      '识别出的文本自动输入到输入框；按所选模式结束本次输入',
+    ],
+    note: '提示：快捷键为系统级全局生效。个别以管理员权限运行的前台程序可能收不到注入文本（Windows UIPI 限制），此时请以管理员身份运行 MicYou。',
+    errEmpty: '请先按下并保持想要的组合键，再点「使用此组合」。',
+    errBareMain: '无效组合：字母/数字/普通键作主键时必须搭配至少一个修饰键（单独主键仅支持 F1–F24）。',
+    errSingleMod: '无效组合：纯修饰键组合至少需要两个修饰键（如 左Ctrl+左Shift），避免误触。',
+    saved: '已保存并生效：',
+  },
+  en: {
+    sub: 'Press the hotkey, speak, and the transcription is typed into the focused input field (requires the WhatdidIsay plugin for offline recognition)',
+    hotkey: 'Hotkey',
+    capture: 'Capture keys',
+    cancel: 'Cancel (Esc)',
+    use: 'Use this combo',
+    capturingHint: 'Capturing: press and hold the combination you want (modifier-only combos like LCtrl+LShift are supported), preview it, then click “Use this combo”.',
+    hotkeyHint: 'Modifiers: ctrl / alt / shift / win (either side), or lctrl / rctrl / lalt / ralt / lshift / rshift / lwin / rwin (a specific side); main key: a-z, 0-9, F1–F24, space, enter, etc. Rules: letter/digit/ordinary main keys require a modifier; modifier-only combos need at least two modifiers; bare main keys are limited to F1–F24. Changes apply instantly and the old combo stops working.',
+    mode: 'Trigger mode',
+    modeToggle: 'Toggle',
+    modePtt: 'Push-to-Talk',
+    modeHint: 'Toggle: press once to start typing, press again to stop — good for long sentences. Push-to-Talk: type while holding the hotkey, release to stop — good for short phrases. Applies instantly.',
+    how: 'How to use',
+    steps: [
+      'Make sure the WhatdidIsay plugin is installed and enabled (this plugin consumes its transcription broadcast)',
+      'Click into the target input field (any app)',
+      'Press the hotkey and speak — a red mic marker appears next to the caret',
+      'Recognised text is typed into the field automatically; end the session per the selected mode',
+    ],
+    note: 'Note: the hotkey works system-wide. A few foreground apps running as administrator may not receive injected text (Windows UIPI); run MicYou as administrator in that case.',
+    errEmpty: 'Press and hold the combination you want first, then click “Use this combo”.',
+    errBareMain: 'Invalid combo: a letter/digit/ordinary main key requires at least one modifier (bare main keys are limited to F1–F24).',
+    errSingleMod: 'Invalid combo: modifier-only combos need at least two modifiers (e.g. LCtrl+LShift) to avoid accidental triggers.',
+    saved: 'Saved & active: ',
+  },
+};
+
+let t = T['zh-CN'];
+const $ = (id) => document.getElementById(id);
+
+// ── hotkey capture (supports modifier-only combos, unlike a plain keydown picker) ──
+let captureMode = false;
+const held = new Set(); // e.code values currently held
+
+const MOD_ORDER = [
+  ['ControlLeft', 'lctrl'], ['ControlRight', 'rctrl'],
+  ['AltLeft', 'lalt'], ['AltRight', 'ralt'],
+  ['ShiftLeft', 'lshift'], ['ShiftRight', 'rshift'],
+  ['MetaLeft', 'lwin'], ['MetaRight', 'rwin'],
+];
+
+function mainToken(code) {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3).toLowerCase();
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code.toLowerCase();
+  const map = {
+    Space: 'space', Enter: 'enter', NumpadEnter: 'enter', Tab: 'tab',
+    Backspace: 'backspace', Delete: 'delete', Insert: 'insert',
+    Home: 'home', End: 'end', PageUp: 'pageup', PageDown: 'pagedown',
+    ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+    Minus: 'minus', Equal: 'equal', BracketLeft: 'bracketleft', BracketRight: 'bracketright',
+    Backslash: 'backslash', Semicolon: 'semicolon', Quote: 'quote',
+    Comma: 'comma', Period: 'period', Slash: 'slash', Backquote: 'backquote',
+    Pause: 'pause',
+  };
+  return map[code] || null;
+}
+
+function isModCode(code) { return MOD_ORDER.some(([c]) => c === code); }
+
+function currentTokens() {
+  const mods = MOD_ORDER.filter(([c]) => held.has(c)).map(([, tok]) => tok);
+  let main = null;
+  for (const code of held) {
+    if (!isModCode(code)) {
+      const tok = mainToken(code);
+      if (tok) main = tok; // last non-modifier held wins for preview
+    }
+  }
+  return { mods, main };
+}
+
+function validate(tokens) {
+  const { mods, main } = tokens;
+  if (mods.length === 0 && !main) return t.errEmpty;
+  if (main) {
+    const bareFKey = /^f([1-9]|1[0-9]|2[0-4])$/.test(main);
+    if (mods.length === 0 && !bareFKey) return t.errBareMain;
+  } else if (mods.length < 2) {
+    return t.errSingleMod;
+  }
+  return null;
+}
+
+function updatePreview() {
+  const toks = currentTokens();
+  const parts = [...toks.mods];
+  if (toks.main) parts.push(toks.main);
+  const kbd = $('hotkeyVal');
+  kbd.textContent = parts.length ? parts.join(' + ') : '…';
+  kbd.classList.toggle('live', captureMode && parts.length > 0);
+  const err = parts.length ? validate(toks) : null;
+  showErr(err);
+  $('useBtn').disabled = !!err || parts.length === 0;
+}
+
+function showErr(msg) {
+  $('errBox').style.display = msg ? 'block' : 'none';
+  if (msg) $('errBox').textContent = msg;
+}
+
+function onCaptureDown(e) {
+  e.preventDefault(); e.stopPropagation();
+  if (e.code === 'Escape') { exitCaptureMode(); return; }
+  held.add(e.code);
+  updatePreview();
+}
+function onCaptureUp(e) {
+  e.preventDefault(); e.stopPropagation();
+  held.delete(e.code);
+  updatePreview();
+}
+function onCaptureBlur() {
+  held.clear();
+  updatePreview();
+}
+
+function enterCaptureMode() {
+  captureMode = true;
+  held.clear();
+  $('captureBtn').textContent = t.cancel;
+  $('captureBtn').classList.add('capturing');
+  $('useBtn').style.display = '';
+  $('useBtn').disabled = true;
+  $('hotkeyHint').textContent = t.capturingHint;
+  showErr(null);
+  $('hotkeyVal').textContent = '…';
+  $('hotkeyVal').classList.add('live');
+  window.addEventListener('keydown', onCaptureDown, true);
+  window.addEventListener('keyup', onCaptureUp, true);
+  window.addEventListener('blur', onCaptureBlur);
+}
+
+function exitCaptureMode() {
+  captureMode = false;
+  held.clear();
+  $('captureBtn').textContent = t.capture;
+  $('captureBtn').classList.remove('capturing');
+  $('useBtn').style.display = 'none';
+  $('hotkeyVal').classList.remove('live');
+  window.removeEventListener('keydown', onCaptureDown, true);
+  window.removeEventListener('keyup', onCaptureUp, true);
+  window.removeEventListener('blur', onCaptureBlur);
+  refresh();
+}
+
+async function commitHotkey() {
+  const toks = currentTokens();
+  const err = validate(toks);
+  if (err) { showErr(err); return; }
+  const str = [...toks.mods, ...(toks.main ? [toks.main] : [])].join('+');
+  try {
+    await call('set_config', { key: 'hotkey', value: str });
+    // The host broadcasts config:changed on set_plugin_config, which the
+    // plugin applies live; the explicit trigger is a belt-and-braces fallback.
+    await call('trigger', { action: 'apply' });
+  } catch (e) { console.warn(e); }
+  exitCaptureMode();
+}
+
+$('captureBtn').addEventListener('click', () => {
+  captureMode ? exitCaptureMode() : enterCaptureMode();
+});
+$('useBtn').addEventListener('click', commitHotkey);
+
+// ── mode ──
+$('modeSel').addEventListener('change', async () => {
+  try {
+    await call('set_config', { key: 'mode', value: $('modeSel').value });
+    await call('trigger', { action: 'apply' });
+  } catch (e) { console.warn(e); }
+});
+
+// ── rendering ──
+function render(cfg) {
+  if (!captureMode) {
+    $('hotkeyVal').textContent = String((cfg && cfg.hotkey) || 'lctrl+lshift');
+    const mode = String((cfg && cfg.mode) || 'toggle');
+    if ($('modeSel').value !== mode) $('modeSel').value = mode;
+  }
+}
+
+function applyTexts() {
+  $('subTitle').textContent = t.sub;
+  $('hotkeyLabel').textContent = t.hotkey;
+  $('modeLabel').textContent = t.mode;
+  $('modeOptToggle').textContent = t.modeToggle;
+  $('modeOptPtt').textContent = t.modePtt;
+  $('modeHint').textContent = t.modeHint;
+  $('howTitle').textContent = t.how;
+  $('howList').innerHTML = t.steps.map((s) => `<li>${s}</li>`).join('');
+  $('noteHint').textContent = t.note;
+  if (captureMode) {
+    $('captureBtn').textContent = t.cancel;
+    $('useBtn').textContent = t.use;
+    $('hotkeyHint').textContent = t.capturingHint;
+  } else {
+    $('captureBtn').textContent = t.capture;
+    $('useBtn').textContent = t.use;
+    $('hotkeyHint').textContent = t.hotkeyHint;
+  }
+}
+
+async function refresh() {
+  try {
+    const cfg = await call('get_config', {});
+    render(cfg);
+  } catch (e) { /* host unavailable yet */ }
+}
+
+(async function init() {
+  try {
+    const lang = await call('locale');
+    t = String(lang).startsWith('zh') ? T['zh-CN'] : T.en;
+  } catch (e) { /* keep zh-CN */ }
+  applyTexts();
+  await refresh();
+  setInterval(refresh, 1500);
+})();
+</script>
+</body>
+</html>

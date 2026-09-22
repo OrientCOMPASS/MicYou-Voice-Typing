@@ -1,32 +1,67 @@
 {
   "id": "opss.voice-typing",
   "name": "Voice-Typing",
-  "runtime": "native",
-  "version": "0.1.0",
-  "description": "Windows端的语音输入法，依赖WhatdidIsay",
+  "version": "0.1.1",
+  "description": "Voice typing for Windows, dependent on WhatdidIsay.",
+  "descriptionI18n": {
+    "zh": "Windows端的语音输入法，依赖WhatdidIsay实时语音转录。",
+    "zh-CN": "Windows端的语音输入法，依赖WhatdidIsay实时语音转录。"
+  },
+  "nameI18n": {
+    "zh": "语音输入法",
+    "zh-CN": "语音输入法"
+  },
   "license": "Unlicense",
-  "platforms": ["windows"],
-  "arches":["x86_64"],
+  "runtime": "native",
   "entry": "micyou_voice_typing",
-  "updateUrl": "https://micyou-dev.github.io/MicYou-Plugins/plugin/opss.voice-typing/plugin.json",
-  "downloadUrl": "https://github.com/OrientCOMPASS/MicYou-Voice-Typing/releases/download/v0.1.0/opss.voice-typing.zip",
+  "platforms": ["windows"],
+  "arches": ["x86_64"],
+  "minHostVersion": "2.0.3",
   "apiVersion": 1,
   "dependencies": [
-  { "id": "opss.whatdidisay", "version": "^0.2.5", "optional": false }
-],
+    { "id": "opss.whatdidisay", "version": "^0.2.5", "optional": false }
+  ],
   "capabilities": [
     "config.read",
     "config.write"
   ],
+  "ui": {
+    "route": "panel",
+    "label": "Voice-Typing",
+    "panels": [
+      {
+        "id": "settings",
+        "label": "Voice-Typing",
+        "entry": "panel.html"
+      }
+    ]
+  },
+  "keywords": [
+    "voice-typing",
+    "speech-to-text",
+    "input-method",
+    "dictation",
+    "hotkey",
+    "windows"
+  ],
   "config": {
-    "mode": "toggle"
+    "mode": "toggle",
+    "hotkey": "lctrl+lshift"
   },
   "configSchema": {
     "fields": [
       {
+        "key": "hotkey",
+        "fieldType": "string",
+        "label": "触发快捷键 Hotkey",
+        "description": "用 + 连接修饰键与主键。修饰键：ctrl/alt/shift/win（左右均可触发）或 lctrl/rctrl/lalt/ralt/lshift/rshift/lwin/rwin（区分左右）；主键：a-z、0-9、f1-f24、space、enter 等。示例：lctrl+lshift（默认，纯修饰键组合）、ctrl+shift+f8、alt+space、f13。规则：字母/数字/普通键作主键时必须搭配修饰键；纯修饰键组合至少两个修饰键；单独使用仅支持 F1-F24。修改后立即生效（旧组合自动失效），也可在插件专属设置页用「按键捕获」直接录入。",
+        "default": "lctrl+lshift"
+      },
+      {
         "key": "mode",
         "fieldType": "select",
-        "label": "触发模式 (快捷键固定为 LCtrl + LShift)",
+        "label": "触发模式 Mode",
+        "description": "按键切换：按一次快捷键开始输入，再按一次结束，适合连续长句；长按说话：按住快捷键期间输入，松开即结束，适合碎片短语。修改后立即生效。",
         "default": "toggle",
         "options": [
           { "value": "toggle", "label": "按键切换 (Toggle)" },
@@ -34,5 +69,10 @@
         ]
       }
     ]
-  }
+  },
+  "repository": "https://github.com/OrientCOMPASS/MicYou-Voice-Typing",
+  "homepage": "https://github.com/OrientCOMPASS/MicYou-Voice-Typing",
+  "updateUrl": "https://github.com/OrientCOMPASS/MicYou-Voice-Typing/releases/latest/download/plugin.json",
+  "downloadUrl": "https://github.com/OrientCOMPASS/MicYou-Voice-Typing/releases/latest/download/opss.voice-typing.zip",
+  "readmeUrl": "https://raw.githubusercontent.com/OrientCOMPASS/MicYou-Voice-Typing/refs/heads/main/README.md"
 }

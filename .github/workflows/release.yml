@@ -1,0 +1,210 @@
+name: Build & Release
+
+# 操作手册（与 Focus-Capture 的 release.yml 同构，单平台 Windows 版）：
+#   * push 到 main（任何提交，含直接改 plugin.json 版本号）→
+#     仅自动构建 development build：windows-latest 原生 MSVC 编译 + 单测，
+#     打包为 Actions artifact（voice-typing-development，根即插件目录），
+#     **绝不创建 release / tag**。
+#   * 发 release：Actions 页面 → Run workflow（workflow_dispatch），
+#     可选 bump 档位（none/patch/minor/major，默认 none = 用 main 上
+#     plugin.json 的当前版本）。流程：构建 → 打包 → 打 tag v<ver> →
+#     创建 Release（资产：opss.voice-typing.zip 固定名主包 + plugin.json
+#     （与 zip 内 manifest 同一份，供 updateUrl 更新检查与手动市场 PR））。
+#     若选择 bump 档位，会把新版本号回提交到 main（提交信息带 [skip ci]）。
+#   * downloadUrl / updateUrl 均指向 releases/latest/download/*，配合固定
+#     资产名，宿主「检查更新」无需每次改 URL。
+#   * 同一版本重复发 release 会直接失败并提示（release 已存在），防止误覆盖。
+#   * 提交信息含 [skip ci] → 整个 workflow 跳过（GitHub 原生行为）。
+#   * 无 pull_request 触发器：PR 不跑 CI，合并进 main 后按 push 规则出 dev 构建。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Release 版本档位：none = 使用 main 上 plugin.json 当前版本"
+        type: choice
+        default: none
+        options: [none, patch, minor, major]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # 静态链接 C 运行时，确保 DLL 在干净的系统上也能直接运行（沿用旧 build-dll.yml）
+  RUSTFLAGS: "-C target-feature=+crt-static"
+
+jobs:
+  build:
+    name: 构建 windows-x86_64-msvc
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: 安装 Rust 工具链（原生 MSVC）
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Cargo 依赖
+        uses: Swatinem/rust-cache@v2
+
+      - name: 单元测试（快捷键组合解析等）
+        run: cargo test --release
+
+      - name: Release 构建
+        run: cargo build --release
+
+      - name: 归置产物（crate 名连字符已按下划线产出 micyou_voice_typing.dll）
+        shell: bash
+        run: |
+          mkdir -p stage
+          cp target/release/micyou_voice_typing.dll stage/
+          ls -la stage/
+
+      - name: 上传平台产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: lib-windows-x86_64-msvc
+          path: stage/micyou_voice_typing.dll
+
+  dev-package:
+    name: development 包（仅 push）
+    if: github.event_name == 'push'
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: 下载构建产物
+        uses: actions/download-artifact@v7
+        with:
+          pattern: lib-*
+          path: libs
+          merge-multiple: true
+
+      - name: 扁平化产物（兼容 artifact 任意目录层级）
+        run: |
+          mkdir -p libs_flat
+          find libs -type f | while read -r f; do cp "$f" "libs_flat/$(basename "$f")"; done
+          ls -la libs_flat/
+          test -f libs_flat/micyou_voice_typing.dll
+
+      - name: 组装插件包目录（根即 plugin.json，可直接安装/导入）
+        run: |
+          mkdir -p stage/assets
+          cp plugin.json panel.html README.md LICENSE stage/
+          cp assets/start.wav assets/end.wav stage/assets/
+          cp libs_flat/micyou_voice_typing.dll stage/
+          ls -laR stage/
+
+      # artifact zip 的根即包内容（upload-artifact 会剥离公共父目录），
+      # 用户下载该 artifact 后无需解套、直接解压安装或应用内导入
+      - name: 上传 development artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: voice-typing-development
+          path: stage
+
+  release:
+    name: 手动发布 Release
+    if: github.event_name == 'workflow_dispatch'
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: 下载构建产物
+        uses: actions/download-artifact@v7
+        with:
+          pattern: lib-*
+          path: libs
+          merge-multiple: true
+
+      - name: 决定版本号（bump 档位 / 防重复）
+        id: ver
+        run: |
+          python3 - <<'PY'
+          import json, os
+          p = 'plugin.json'
+          m = json.load(open(p))
+          maj, min_, pat = [int(x) for x in m['version'].split('.')]
+          bump = os.environ['BUMP']
+          if bump == 'patch':
+              pat += 1
+          elif bump == 'minor':
+              min_ += 1; pat = 0
+          elif bump == 'major':
+              maj += 1; min_ = 0; pat = 0
+          ver = f"{maj}.{min_}.{pat}"
+          m['version'] = ver
+          json.dump(m, open(p, 'w'), ensure_ascii=False, indent=2)
+          open(os.environ['GITHUB_OUTPUT'], 'a').write(f"version={ver}\n")
+          open(os.environ['GITHUB_OUTPUT'], 'a').write(f"bumped={'true' if bump != 'none' else 'false'}\n")
+          print("release version:", ver, f"(bump={bump})")
+          PY
+        env:
+          BUMP: ${{ github.event.inputs.bump }}
+
+      - name: 防止重复发布同版本
+        run: |
+          if gh release view "v${{ steps.ver.outputs.version }}" >/dev/null 2>&1; then
+            echo "::error::release v${{ steps.ver.outputs.version }} 已存在；请在 main 修改 plugin.json 版本或选择 bump 档位"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: 扁平化产物（兼容 artifact 任意目录层级）
+        run: |
+          mkdir -p libs_flat
+          find libs -type f | while read -r f; do cp "$f" "libs_flat/$(basename "$f")"; done
+          ls -la libs_flat/
+          test -f libs_flat/micyou_voice_typing.dll
+
+      - name: 组装发布包（plugin.json 全通道同一份）
+        run: |
+          # 固定资产名 opss.voice-typing.zip ⇒ manifest 里的
+          # downloadUrl=releases/latest/download/opss.voice-typing.zip 对每个
+          # 版本都可解析；zip 内 manifest == release 的 plugin.json 资产
+          mkdir -p stage/assets dist
+          cp plugin.json panel.html README.md LICENSE stage/
+          cp assets/start.wav assets/end.wav stage/assets/
+          cp libs_flat/micyou_voice_typing.dll stage/
+          (cd stage && zip -q -r ../dist/opss.voice-typing.zip .)
+          ls -la dist/
+
+      - name: 生成变更日志（自上一个 tag）
+        run: |
+          LAST=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST" ]; then git log --oneline "$LAST..HEAD" > /tmp/notes.md; else git log --oneline -20 > /tmp/notes.md; fi
+          echo "" >> /tmp/notes.md
+          echo "Windows x86_64 单包（含 assets/ 提示音）。release 的 plugin.json 资产供 updateUrl 更新检查与向 MicYou-Plugins 提手动市场 PR；opss.voice-typing.zip 为固定资产名，供 downloadUrl（releases/latest/download）解析。" >> /tmp/notes.md
+
+      - name: 打 tag 并发布 Release
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          git config user.name "voice-typing-ci"
+          git config user.email "ci@users.noreply.github.com"
+          git tag "v${VER}"
+          git push origin "v${VER}"
+          gh release create "v${VER}" "dist/opss.voice-typing.zip" plugin.json \
+            --title "v${VER}" --notes-file /tmp/notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: bump 回提交到 main（[skip ci]）
+        if: steps.ver.outputs.bumped == 'true'
+        run: |
+          git add plugin.json
+          git commit -m "chore(release): bump version to ${{ steps.ver.outputs.version }} [skip ci]"
+          git push origin HEAD:main
+        env:
+          GH_TOKEN: ${{ github.token }}
