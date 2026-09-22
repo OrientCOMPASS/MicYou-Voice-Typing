@@ -196,7 +196,24 @@ fn resolve_combo(requested: &str, fallback: hotkey::Combo) -> hotkey::Combo {
     }
 }
 
-/// Re-read `hotkey` / `mode` from host config and apply them live.
+/// Read one config value as a finite f32 (numbers arrive unquoted, e.g. `80`).
+fn get_config_f32(key: &str, default: f32) -> f32 {
+    get_config_string(key)
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .filter(|v| v.is_finite())
+        .unwrap_or(default)
+}
+
+/// Volume percent (0–100) from config, applied to the resident prompt sounds.
+fn apply_volume() -> f32 {
+    let pct = get_config_f32("volume", 100.0).clamp(0.0, 100.0);
+    if let Some(engine) = audio::global() {
+        engine.set_volume(pct / 100.0);
+    }
+    pct
+}
+
+/// Re-read `hotkey` / `mode` / `volume` from host config and apply them live.
 /// Called from `handle_message` (host-dispatched thread) when the host
 /// broadcasts `config:changed` (or the panel sends `ui:apply`).
 fn reload_settings() {
@@ -209,6 +226,11 @@ fn reload_settings() {
         .unwrap_or_else(|| hotkey::DEFAULT_HOTKEY.to_string());
     let combo = resolve_combo(&hotkey_text, current.combo);
     hotkey::update_settings(hotkey::Settings { combo, mode });
+    let pct = apply_volume();
+    log_info(&format!(
+        "settings applied: hotkey=[{combo}] mode={} volume={pct}%",
+        mode.as_str()
+    ));
 }
 
 // ─────────────────────────── plugin ABI ───────────────────────────
@@ -235,6 +257,12 @@ pub extern "C" fn micyou_plugin_init(host: *const mpl_host_api_t) -> mpl_result_
         let end_wav = std::fs::read(Path::new(&plugin_dir).join("assets/end.wav")).unwrap_or_default();
 
         let audio_engine = audio::AudioEngine::new(start_wav, end_wav);
+        // Prompt-sound volume: scale the resident working copies from the
+        // masters once at startup; live changes come via reload_settings.
+        let volume_pct = get_config_f32("volume", 100.0).clamp(0.0, 100.0);
+        audio_engine.set_volume(volume_pct / 100.0);
+        audio::set_global(audio_engine.clone());
+
         let state_machine = state_machine::TimeWindowStateMachine::new(1500);
 
         let mode_str = get_config_string("mode")
@@ -257,7 +285,7 @@ pub extern "C" fn micyou_plugin_init(host: *const mpl_host_api_t) -> mpl_result_
         ui::start_ui_thread(state_machine);
 
         log_info(&format!(
-            "Voice-Typing v{} ready — hotkey [{}] mode={}",
+            "Voice-Typing v{} ready — hotkey [{}] mode={} volume={volume_pct}%",
             env!("CARGO_PKG_VERSION"),
             settings.combo,
             settings.mode.as_str()

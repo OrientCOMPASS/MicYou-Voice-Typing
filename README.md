@@ -41,24 +41,35 @@
 | `ctrl+shift` | 任意一侧的 Ctrl + Shift |
 | `ctrl+shift+f8` | 经典三键组合（主键会被吞掉，不会传给前台应用） |
 | `alt+space` | Alt + 空格 |
-| `f13` | 单独 F13（无修饰键时仅支持 F1–F24） |
+| `f13` | 单独 F13（无修饰键时仅支持 F1–F24 与鼠标侧键） |
+| `mouse4` | 单独鼠标侧键（后退键；侧键击键会被吞掉，不会触发浏览器前进/后退） |
+| `ctrl+mouse5` | Ctrl + 鼠标前进侧键 |
 
 **词法**：
 
 - 修饰键：`ctrl` / `alt` / `shift` / `win`（左右均可触发），或 `lctrl` `rctrl` `lalt` `ralt` `lshift` `rshift` `lwin` `rwin`（区分左右）
-- 主键：`a`-`z`、`0`-`9`、`f1`-`f24`、`space`、`enter`、`tab`、`esc`、`backspace`、`delete`、`insert`、`home`、`end`、`pageup`、`pagedown`、`up`/`down`/`left`/`right`、`minus`、`equal`、`bracketleft`、`bracketright`、`backslash`、`semicolon`、`quote`、`comma`、`period`、`slash`、`backquote`、`pause`
+- 键盘主键：`a`-`z`、`0`-`9`、`f1`-`f24`、`space`、`enter`、`tab`、`esc`、`backspace`、`delete`、`insert`、`home`、`end`、`pageup`、`pagedown`、`up`/`down`/`left`/`right`、`minus`、`equal`、`bracketleft`、`bracketright`、`backslash`、`semicolon`、`quote`、`comma`、`period`、`slash`、`backquote`、`pause`
+- 鼠标侧键：`mouse4`（后退）/ `mouse5`（前进），别名 `xbutton1`/`xbutton2`、`x1`/`x2`、`back`/`forward`；可单独使用或与修饰键组合（如 `ctrl+mouse5`）
 
 **安全规则**（不满足会被拒绝并写入插件日志，沿用旧组合）：
 
 - 字母 / 数字 / 普通键作主键时**必须搭配至少一个修饰键**（否则会劫持正常打字）
 - 纯修饰键组合**至少两个修饰键**（单独的 `lctrl` 会让每次 Ctrl+C 都触发）
-- 无修饰键的单独主键仅支持 `F1`–`F24`
-- 鼠标侧键暂不支持（本插件仅监听键盘）
+- 无修饰键的单独主键仅支持 `F1`–`F24` 与鼠标侧键 `mouse4`/`mouse5`（两者都不产生文本输入）
+- 鼠标滚轮、左/中/右键不支持作为主键
 
 **两种修改方式，均立即生效**（宿主保存配置时广播 `config:changed`，插件热更新组合，旧组合自动失效，无需禁用再启用）：
 
 1. 插件卡片的配置表单 / JSON 编辑器，改 `hotkey` 字段
-2. **专属设置页**（设置对话框侧边栏 → Voice-Typing）：点「按键捕获」，按下并保持想要的组合，预览确认后点「使用此组合」——纯修饰键组合也能直接录入
+2. **专属设置页**（设置对话框侧边栏 → Voice-Typing）：点「按键捕获」，按下组合键或直接点击鼠标侧键，预览为粘性快照（松开按键不丢失），确认后点「使用此组合」——纯修饰键组合与侧键都能直接录入
+
+> 实现细节：只有当前组合用到鼠标侧键时才会挂 `WH_MOUSE_LL` 钩子（纯键盘组合零鼠标开销）；含主键的组合会吞掉主键击键（键盘与侧键一致），前台应用不会收到热键。
+
+## 🔊 提示音音量
+
+`volume` 配置（0–100，默认 100，0 = 静音）控制开始/结束提示音的音量，可在配置表单或专属设置页的滑杆调节，**保存后立即生效**。
+
+内存设计（避免连乘陷阱）：提示音 WAV **常驻内存**并保存**两份数据**——不可变的**原始母带**与供 `PlaySoundA` 播放的**缩放工作副本**。每次调节音量都从母带重新计算 `母带 × 音量`，绝不在工作副本上二次缩放，因此反复调节既不会增益叠乘、也不会累积舍入失真；100% 时工作指针直接指向母带（零额外内存、字节级原样播放）。工作副本经原子指针换入，被替换的旧缓冲**永不释放**（`SND_ASYNC` 异步播放可能在调用返回后仍在读取），单个缓冲仅数 KB 且只有调音量才产生一份，增长以调节次数为上界。支持 8/16-bit PCM 与 32-bit float WAV（内置提示音为 8-bit PCM），未知格式按原样播放不缩放。
 
 ## 🛠️ 开发者指南
 
@@ -73,7 +84,7 @@
 git clone https://github.com/OrientCOMPASS/MicYou-Voice-Typing.git
 cd MicYou-Voice-Typing
 
-cargo test --release    # 快捷键组合解析等单元测试
+cargo test --release    # 快捷键解析、音量缩放等单元测试
 cargo build --release   # 产物 target/release/micyou_voice_typing.dll
 ```
 

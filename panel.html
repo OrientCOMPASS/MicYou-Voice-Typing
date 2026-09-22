@@ -38,6 +38,8 @@
     border: 1px solid hsl(var(--outline)); border-radius: 10px;
     padding: 7px 10px; font-size: 13.5px; max-width: 260px;
   }
+  input[type=range] { flex: 1; accent-color: hsl(var(--primary)); min-width: 140px; }
+  .val { min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
   kbd {
     background: hsl(var(--surface-variant)); border: 1px solid hsl(var(--outline));
     border-bottom-width: 2px; border-radius: 6px; padding: 2px 9px;
@@ -80,6 +82,12 @@
       </select>
     </div>
     <div class="hint" id="modeHint"></div>
+    <div class="row">
+      <label id="volumeLabel"></label>
+      <input type="range" id="volume" min="0" max="100" step="5" value="100" />
+      <span class="val" id="volumeVal">100%</span>
+    </div>
+    <div class="hint" id="volumeHint"></div>
   </div>
 
   <div class="card">
@@ -110,12 +118,14 @@ const T = {
     capture: '按键捕获',
     cancel: '取消（Esc）',
     use: '使用此组合',
-    capturingHint: '正在捕获：按下并保持你想要的组合键（支持纯修饰键组合，如 左Ctrl+左Shift），预览确认后点「使用此组合」。',
-    hotkeyHint: '修饰键：ctrl / alt / shift / win（左右均可触发），或 lctrl / rctrl / lalt / ralt / lshift / rshift / lwin / rwin（区分左右）；主键：a-z、0-9、F1–F24、space、enter 等。规则：字母/数字/普通键作主键必须搭配修饰键；纯修饰键组合至少两个修饰键；单独主键仅支持 F1–F24。保存后立即生效，旧组合自动失效。',
+    capturingHint: '正在捕获：按下并保持组合键（支持纯修饰键组合，如 左Ctrl+左Shift），或直接点击鼠标侧键；预览会保留，松开按键后再点「使用此组合」即可。Esc 取消。',
+    hotkeyHint: '修饰键：ctrl / alt / shift / win（左右均可触发），或 lctrl / rctrl / lalt / ralt / lshift / rshift / lwin / rwin（区分左右）；主键：a-z、0-9、F1–F24、space、enter 等，也支持鼠标侧键 mouse4 / mouse5（浏览器后退/前进键，可单独使用）。规则：字母/数字/普通键作主键必须搭配修饰键；纯修饰键组合至少两个修饰键；无修饰键的单独主键仅支持 F1–F24 与鼠标侧键。保存后立即生效，旧组合自动失效。',
     mode: '触发模式',
     modeToggle: '按键切换 (Toggle)',
     modePtt: '长按说话 (Push-to-Talk)',
     modeHint: '按键切换：按一次快捷键开始输入，再按一次结束，适合连续长句；长按说话：按住快捷键期间输入，松开即结束，适合碎片短语。修改后立即生效。',
+    volume: '提示音量',
+    volumeHint: '开始/结束提示音的音量（0 = 静音）。提示音常驻内存并保存原始/缩放两份数据，每次调节都从原始音频重新计算，反复调节不会累积失真。保存后立即生效。',
     how: '使用方法',
     steps: [
       '确保 WhatdidIsay 插件已安装并启用（本插件依赖它的转录广播）',
@@ -124,10 +134,9 @@ const T = {
       '识别出的文本自动输入到输入框；按所选模式结束本次输入',
     ],
     note: '提示：快捷键为系统级全局生效。个别以管理员权限运行的前台程序可能收不到注入文本（Windows UIPI 限制），此时请以管理员身份运行 MicYou。',
-    errEmpty: '请先按下并保持想要的组合键，再点「使用此组合」。',
-    errBareMain: '无效组合：字母/数字/普通键作主键时必须搭配至少一个修饰键（单独主键仅支持 F1–F24）。',
+    errEmpty: '请先按下组合键或点击鼠标侧键，预览出现后再点「使用此组合」。',
+    errBareMain: '无效组合：字母/数字/普通键作主键时必须搭配至少一个修饰键；无修饰键的单独主键仅支持 F1–F24 与鼠标侧键（mouse4/mouse5）。',
     errSingleMod: '无效组合：纯修饰键组合至少需要两个修饰键（如 左Ctrl+左Shift），避免误触。',
-    saved: '已保存并生效：',
   },
   en: {
     sub: 'Press the hotkey, speak, and the transcription is typed into the focused input field (requires the WhatdidIsay plugin for offline recognition)',
@@ -135,12 +144,14 @@ const T = {
     capture: 'Capture keys',
     cancel: 'Cancel (Esc)',
     use: 'Use this combo',
-    capturingHint: 'Capturing: press and hold the combination you want (modifier-only combos like LCtrl+LShift are supported), preview it, then click “Use this combo”.',
-    hotkeyHint: 'Modifiers: ctrl / alt / shift / win (either side), or lctrl / rctrl / lalt / ralt / lshift / rshift / lwin / rwin (a specific side); main key: a-z, 0-9, F1–F24, space, enter, etc. Rules: letter/digit/ordinary main keys require a modifier; modifier-only combos need at least two modifiers; bare main keys are limited to F1–F24. Changes apply instantly and the old combo stops working.',
+    capturingHint: 'Capturing: press and hold a combination (modifier-only combos like LCtrl+LShift work), or click a mouse side button. The preview is sticky — release the keys, then click “Use this combo”. Esc cancels.',
+    hotkeyHint: 'Modifiers: ctrl / alt / shift / win (either side), or lctrl / rctrl / lalt / ralt / lshift / rshift / lwin / rwin (a specific side); main key: a-z, 0-9, F1–F24, space, enter, etc., plus mouse side buttons mouse4 / mouse5 (browser back/forward, may be used bare). Rules: letter/digit/ordinary main keys require a modifier; modifier-only combos need at least two modifiers; bare main keys are limited to F1–F24 and the mouse side buttons. Changes apply instantly and the old combo stops working.',
     mode: 'Trigger mode',
     modeToggle: 'Toggle',
     modePtt: 'Push-to-Talk',
     modeHint: 'Toggle: press once to start typing, press again to stop — good for long sentences. Push-to-Talk: type while holding the hotkey, release to stop — good for short phrases. Applies instantly.',
+    volume: 'Prompt volume',
+    volumeHint: 'Volume of the start/end prompt sounds (0 = mute). The sounds stay resident in memory in two copies (original + scaled); every adjustment is recomputed from the original, so repeated changes never compound distortion. Applies instantly.',
     how: 'How to use',
     steps: [
       'Make sure the WhatdidIsay plugin is installed and enabled (this plugin consumes its transcription broadcast)',
@@ -149,19 +160,24 @@ const T = {
       'Recognised text is typed into the field automatically; end the session per the selected mode',
     ],
     note: 'Note: the hotkey works system-wide. A few foreground apps running as administrator may not receive injected text (Windows UIPI); run MicYou as administrator in that case.',
-    errEmpty: 'Press and hold the combination you want first, then click “Use this combo”.',
-    errBareMain: 'Invalid combo: a letter/digit/ordinary main key requires at least one modifier (bare main keys are limited to F1–F24).',
+    errEmpty: 'Press a combination or click a mouse side button first; once the preview shows it, click “Use this combo”.',
+    errBareMain: 'Invalid combo: a letter/digit/ordinary main key requires at least one modifier; bare main keys are limited to F1–F24 and mouse side buttons (mouse4/mouse5).',
     errSingleMod: 'Invalid combo: modifier-only combos need at least two modifiers (e.g. LCtrl+LShift) to avoid accidental triggers.',
-    saved: 'Saved & active: ',
   },
 };
 
 let t = T['zh-CN'];
 const $ = (id) => document.getElementById(id);
 
-// ── hotkey capture (supports modifier-only combos, unlike a plain keydown picker) ──
+// ── hotkey capture ──
+// Sticky-preview design: every keydown / mouse-side click snapshots the full
+// candidate combo into `pending`, and key-up events never clear it — so the
+// user can release the keys (or the mouse button) before clicking "Use this
+// combo". Supports modifier-only combos and mouse4/mouse5.
 let captureMode = false;
-const held = new Set(); // e.code values currently held
+const held = new Set();          // e.code values currently held (keyboard)
+let stickyMouseMain = null;      // 'mouse4' | 'mouse5' from the last side click
+let pending = null;              // { mods: [tok], main: tok|null }
 
 const MOD_ORDER = [
   ['ControlLeft', 'lctrl'], ['ControlRight', 'rctrl'],
@@ -189,40 +205,48 @@ function mainToken(code) {
 
 function isModCode(code) { return MOD_ORDER.some(([c]) => c === code); }
 
-function currentTokens() {
-  const mods = MOD_ORDER.filter(([c]) => held.has(c)).map(([, tok]) => tok);
-  let main = null;
+function heldMods() { return MOD_ORDER.filter(([c]) => held.has(c)).map(([, tok]) => tok); }
+
+function heldKeyMain() {
   for (const code of held) {
     if (!isModCode(code)) {
       const tok = mainToken(code);
-      if (tok) main = tok; // last non-modifier held wins for preview
+      if (tok) return tok;
     }
   }
-  return { mods, main };
+  return null;
 }
 
-function validate(tokens) {
-  const { mods, main } = tokens;
-  if (mods.length === 0 && !main) return t.errEmpty;
-  if (main) {
-    const bareFKey = /^f([1-9]|1[0-9]|2[0-4])$/.test(main);
-    if (mods.length === 0 && !bareFKey) return t.errBareMain;
-  } else if (mods.length < 2) {
+function comboString(p) {
+  return [...p.mods, ...(p.main ? [p.main] : [])].join('+');
+}
+
+function validate(p) {
+  if (!p) return t.errEmpty;
+  if (p.mods.length === 0 && !p.main) return t.errEmpty;
+  if (p.main) {
+    const bareOk = /^f([1-9]|1[0-9]|2[0-4])$/.test(p.main) || p.main === 'mouse4' || p.main === 'mouse5';
+    if (p.mods.length === 0 && !bareOk) return t.errBareMain;
+  } else if (p.mods.length < 2) {
     return t.errSingleMod;
   }
   return null;
 }
 
+function snapshot() {
+  const keyMain = heldKeyMain();
+  pending = { mods: heldMods(), main: keyMain || stickyMouseMain };
+  updatePreview();
+}
+
 function updatePreview() {
-  const toks = currentTokens();
-  const parts = [...toks.mods];
-  if (toks.main) parts.push(toks.main);
   const kbd = $('hotkeyVal');
-  kbd.textContent = parts.length ? parts.join(' + ') : '…';
-  kbd.classList.toggle('live', captureMode && parts.length > 0);
-  const err = parts.length ? validate(toks) : null;
-  showErr(err);
-  $('useBtn').disabled = !!err || parts.length === 0;
+  const str = pending ? comboString(pending) : '';
+  kbd.textContent = str || '…';
+  kbd.classList.toggle('live', captureMode && !!str);
+  const err = pending ? validate(pending) : (captureMode ? null : null);
+  showErr(captureMode ? err : null);
+  $('useBtn').disabled = !pending || !!validate(pending);
 }
 
 function showErr(msg) {
@@ -234,21 +258,35 @@ function onCaptureDown(e) {
   e.preventDefault(); e.stopPropagation();
   if (e.code === 'Escape') { exitCaptureMode(); return; }
   held.add(e.code);
-  updatePreview();
+  if (!isModCode(e.code) && mainToken(e.code)) stickyMouseMain = null; // fresh keyboard main replaces mouse main
+  snapshot();
 }
 function onCaptureUp(e) {
   e.preventDefault(); e.stopPropagation();
   held.delete(e.code);
-  updatePreview();
+  // Sticky preview: do NOT re-snapshot on key-up — the candidate stays.
+}
+function onCaptureMouse(e) {
+  // e.button: 3 = back (mouse4), 4 = forward (mouse5). Ignore other buttons
+  // so the "Use this combo" / "Cancel" clicks keep working.
+  if (e.button !== 3 && e.button !== 4) return;
+  e.preventDefault(); e.stopPropagation();
+  stickyMouseMain = e.button === 3 ? 'mouse4' : 'mouse5';
+  for (const c of Array.from(held)) {
+    if (!isModCode(c)) held.delete(c); // drop stale keyboard main
+  }
+  snapshot();
 }
 function onCaptureBlur() {
   held.clear();
-  updatePreview();
+  // pending stays (sticky) — losing focus shouldn't discard the candidate.
 }
 
 function enterCaptureMode() {
   captureMode = true;
   held.clear();
+  stickyMouseMain = null;
+  pending = null;
   $('captureBtn').textContent = t.cancel;
   $('captureBtn').classList.add('capturing');
   $('useBtn').style.display = '';
@@ -259,27 +297,31 @@ function enterCaptureMode() {
   $('hotkeyVal').classList.add('live');
   window.addEventListener('keydown', onCaptureDown, true);
   window.addEventListener('keyup', onCaptureUp, true);
+  window.addEventListener('mousedown', onCaptureMouse, true);
   window.addEventListener('blur', onCaptureBlur);
 }
 
 function exitCaptureMode() {
   captureMode = false;
   held.clear();
+  stickyMouseMain = null;
+  pending = null;
   $('captureBtn').textContent = t.capture;
   $('captureBtn').classList.remove('capturing');
   $('useBtn').style.display = 'none';
   $('hotkeyVal').classList.remove('live');
+  showErr(null);
   window.removeEventListener('keydown', onCaptureDown, true);
   window.removeEventListener('keyup', onCaptureUp, true);
+  window.removeEventListener('mousedown', onCaptureMouse, true);
   window.removeEventListener('blur', onCaptureBlur);
   refresh();
 }
 
 async function commitHotkey() {
-  const toks = currentTokens();
-  const err = validate(toks);
+  const err = validate(pending);
   if (err) { showErr(err); return; }
-  const str = [...toks.mods, ...(toks.main ? [toks.main] : [])].join('+');
+  const str = comboString(pending);
   try {
     await call('set_config', { key: 'hotkey', value: str });
     // The host broadcasts config:changed on set_plugin_config, which the
@@ -302,6 +344,17 @@ $('modeSel').addEventListener('change', async () => {
   } catch (e) { console.warn(e); }
 });
 
+// ── volume ──
+$('volume').addEventListener('input', () => {
+  $('volumeVal').textContent = $('volume').value + '%';
+});
+$('volume').addEventListener('change', async () => {
+  try {
+    await call('set_config', { key: 'volume', value: Number($('volume').value) });
+    await call('trigger', { action: 'apply' });
+  } catch (e) { console.warn(e); }
+});
+
 // ── rendering ──
 function render(cfg) {
   if (!captureMode) {
@@ -309,6 +362,11 @@ function render(cfg) {
     const mode = String((cfg && cfg.mode) || 'toggle');
     if ($('modeSel').value !== mode) $('modeSel').value = mode;
   }
+  const vol = Number(cfg && typeof cfg.volume !== 'undefined' ? cfg.volume : 100);
+  if (!$('volume').matches(':active') && Number($('volume').value) !== vol) {
+    $('volume').value = vol;
+  }
+  $('volumeVal').textContent = Number($('volume').value) + '%';
 }
 
 function applyTexts() {
@@ -318,18 +376,14 @@ function applyTexts() {
   $('modeOptToggle').textContent = t.modeToggle;
   $('modeOptPtt').textContent = t.modePtt;
   $('modeHint').textContent = t.modeHint;
+  $('volumeLabel').textContent = t.volume;
+  $('volumeHint').textContent = t.volumeHint;
   $('howTitle').textContent = t.how;
   $('howList').innerHTML = t.steps.map((s) => `<li>${s}</li>`).join('');
   $('noteHint').textContent = t.note;
-  if (captureMode) {
-    $('captureBtn').textContent = t.cancel;
-    $('useBtn').textContent = t.use;
-    $('hotkeyHint').textContent = t.capturingHint;
-  } else {
-    $('captureBtn').textContent = t.capture;
-    $('useBtn').textContent = t.use;
-    $('hotkeyHint').textContent = t.hotkeyHint;
-  }
+  $('captureBtn').textContent = captureMode ? t.cancel : t.capture;
+  $('useBtn').textContent = t.use;
+  $('hotkeyHint').textContent = captureMode ? t.capturingHint : t.hotkeyHint;
 }
 
 async function refresh() {

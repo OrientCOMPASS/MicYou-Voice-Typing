@@ -14,12 +14,20 @@
   "license": "Unlicense",
   "runtime": "native",
   "entry": "micyou_voice_typing",
-  "platforms": ["windows"],
-  "arches": ["x86_64"],
+  "platforms": [
+    "windows"
+  ],
+  "arches": [
+    "x86_64"
+  ],
   "minHostVersion": "2.0.3",
   "apiVersion": 1,
   "dependencies": [
-    { "id": "opss.whatdidisay", "version": "^0.2.5", "optional": false }
+    {
+      "id": "opss.whatdidisay",
+      "version": "^0.2.5",
+      "optional": false
+    }
   ],
   "capabilities": [
     "config.read",
@@ -46,7 +54,8 @@
   ],
   "config": {
     "mode": "toggle",
-    "hotkey": "lctrl+lshift"
+    "hotkey": "lctrl+lshift",
+    "volume": 100
   },
   "configSchema": {
     "fields": [
@@ -54,7 +63,7 @@
         "key": "hotkey",
         "fieldType": "string",
         "label": "触发快捷键 Hotkey",
-        "description": "用 + 连接修饰键与主键。修饰键：ctrl/alt/shift/win（左右均可触发）或 lctrl/rctrl/lalt/ralt/lshift/rshift/lwin/rwin（区分左右）；主键：a-z、0-9、f1-f24、space、enter 等。示例：lctrl+lshift（默认，纯修饰键组合）、ctrl+shift+f8、alt+space、f13。规则：字母/数字/普通键作主键时必须搭配修饰键；纯修饰键组合至少两个修饰键；单独使用仅支持 F1-F24。修改后立即生效（旧组合自动失效），也可在插件专属设置页用「按键捕获」直接录入。",
+        "description": "用 + 连接修饰键与主键。修饰键：ctrl/alt/shift/win（左右均可触发）或 lctrl/rctrl/lalt/ralt/lshift/rshift/lwin/rwin（区分左右）；主键：a-z、0-9、f1-f24、space、enter 等键盘键，以及鼠标侧键 mouse4/mouse5（即浏览器后退/前进键，别名 xbutton1/xbutton2/back/forward）。示例：lctrl+lshift（默认，纯修饰键组合）、ctrl+shift+f8、alt+space、f13、mouse4（单独侧键）、ctrl+mouse5。规则：字母/数字/普通键作主键时必须搭配修饰键；纯修饰键组合至少两个修饰键；单独使用（无修饰键）仅支持 F1-F24 与鼠标侧键。修改后立即生效（旧组合自动失效），也可在插件专属设置页用「按键捕获」直接录入（含鼠标侧键）。",
         "default": "lctrl+lshift"
       },
       {
@@ -64,9 +73,25 @@
         "description": "按键切换：按一次快捷键开始输入，再按一次结束，适合连续长句；长按说话：按住快捷键期间输入，松开即结束，适合碎片短语。修改后立即生效。",
         "default": "toggle",
         "options": [
-          { "value": "toggle", "label": "按键切换 (Toggle)" },
-          { "value": "push_to_talk", "label": "长按说话 (Push-to-Talk)" }
+          {
+            "value": "toggle",
+            "label": "按键切换 (Toggle)"
+          },
+          {
+            "value": "push_to_talk",
+            "label": "长按说话 (Push-to-Talk)"
+          }
         ]
+      },
+      {
+        "key": "volume",
+        "fieldType": "number",
+        "label": "提示音量 Volume (%)",
+        "description": "开始/结束提示音的音量百分比（0 = 静音）。提示音常驻内存并保存原始/缩放两份数据，每次调节都从原始音频重新计算，反复调节不会累积失真（无连乘陷阱）。修改后立即生效。",
+        "min": 0,
+        "max": 100,
+        "step": 5,
+        "default": 100
       }
     ]
   },

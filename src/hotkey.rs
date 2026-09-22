@@ -1,22 +1,31 @@
 //! Configurable global-hotkey engine for Voice-Typing (Windows low-level
-//! keyboard hook).
+//! keyboard + mouse hooks).
 //!
 //! History: v0.1 hard-coded `LCtrl + LShift`. v0.2 keeps the same
 //! `WH_KEYBOARD_LL` delivery but parses a user-configured combo string from
-//! plugin config (`hotkey`), so both modifier-only combos (the IME-style
+//! plugin config (`hotkey`), supporting modifier-only combos (the IME-style
 //! default, which the host's `register_hotkey` cannot express — global-hotkey
-//! requires a non-modifier main key) and classic `mods + main key` combos
-//! (e.g. `ctrl+shift+f8`) are supported.
+//! requires a non-modifier main key), classic `mods + main key` combos
+//! (e.g. `ctrl+shift+f8`) and mouse side buttons (`mouse4` / `mouse5`,
+//! bare or combined with modifiers).
 //!
 //! Design notes:
-//! * The hook callback polls `GetAsyncKeyState` on every keyboard event and
+//! * The hook callback polls `GetAsyncKeyState` on every input event and
 //!   edge-triggers on the combo's down/up transition (same approach as v0.1,
-//!   which is immune to missed events and auto-repeat).
-//! * When the combo contains a main key, the main key's own down/up events
-//!   are swallowed (hook returns 1) while the combo's modifiers are held, so
-//!   the foreground app never sees the hotkey keystroke.
+//!   which is immune to missed events and auto-repeat). `GetAsyncKeyState`
+//!   also reports the mouse side buttons (VK_XBUTTON1/2), so cross-device
+//!   combos like `ctrl+mouse4` stay consistent from both hooks.
+//! * When the combo contains a main key (keyboard or mouse), the main key's
+//!   own down/up events are swallowed (hook returns 1) while the combo's
+//!   modifiers are held, so the foreground app never sees the hotkey
+//!   (no stray keystrokes, no browser back/forward on mouse4/5).
 //! * Modifier-only combos are NEVER swallowed — that would break ordinary
 //!   shortcuts like Ctrl+C for the whole system.
+//! * The mouse hook is only installed while the active combo actually uses a
+//!   mouse button (a bare keyboard combo pays zero mouse-hook overhead);
+//!   `update_settings` re-evaluates it on the pump thread via a WM_APP post —
+//!   hooks must be installed/uninstalled from the thread whose message loop
+//!   will dispatch them.
 //! * The effective combo/mode live in a `RwLock` snapshot that `lib.rs`
 //!   updates from `handle_message` (a host-dispatched thread) when the host
 //!   broadcasts `config:changed` — changes apply live, no reload needed.
@@ -31,7 +40,7 @@ use windows::Win32::Foundation::*;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_RCONTROL, VK_RMENU,
-    VK_RSHIFT, VK_RWIN,
+    VK_RSHIFT, VK_RWIN, VK_XBUTTON1, VK_XBUTTON2,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -71,7 +80,7 @@ impl TriggerMode {
 /// Modifiers come in two flavours: `exact_mods` are specific physical keys
 /// (VK_LCONTROL etc. — left/right distinguished), while the `any_*` flags
 /// accept either side. `main_vk == 0` means a modifier-only combo.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Combo {
     exact_mods: [u16; 8],
     any_ctrl: bool,
@@ -147,6 +156,12 @@ impl Combo {
         // key_down (this unsafe fn body is an implicit unsafe block, ed. 2021).
         self.mods_down() && (self.main_vk == 0 || key_down(self.main_vk))
     }
+
+    /// True when the combo's main key is a mouse side button — the pump
+    /// thread installs `WH_MOUSE_LL` only while this holds.
+    pub fn needs_mouse(&self) -> bool {
+        self.main_vk == VK_XBUTTON1.0 || self.main_vk == VK_XBUTTON2.0
+    }
 }
 
 impl fmt::Display for Combo {
@@ -215,14 +230,18 @@ pub fn parse_combo(text: &str) -> Result<Combo, String> {
             "win" | "super" | "meta" | "cmd" | "command" => combo.any_win = true,
             "lwin" | "leftwin" => combo.push_mod(VK_LWIN.0)?,
             "rwin" | "rightwin" => combo.push_mod(VK_RWIN.0)?,
-            "mouse4" | "xbutton1" | "x1" | "mouse5" | "xbutton2" | "x2" => {
-                return Err("鼠标侧键暂不支持：本插件仅监听键盘".into())
-            }
             other => {
                 if main.is_some() {
                     return Err(format!("快捷键只能有一个主键（多余 token: {other}）"));
                 }
-                main = Some(key_to_vk(other).ok_or_else(|| format!("无法识别的键名: {other}"))?);
+                let vk = match other {
+                    // 鼠标侧键（浏览器「后退/前进」键）——可作为主键，允许单独使用
+                    "mouse4" | "xbutton1" | "x1" | "back" => VK_XBUTTON1.0,
+                    "mouse5" | "xbutton2" | "x2" | "forward" => VK_XBUTTON2.0,
+                    _ => key_to_vk(other)
+                        .ok_or_else(|| format!("无法识别的键名: {other}"))?,
+                };
+                main = Some(vk);
             }
         }
     }
@@ -234,12 +253,14 @@ pub fn parse_combo(text: &str) -> Result<Combo, String> {
     if let Some(vk) = main {
         combo.main_vk = vk;
         if combo.mod_count() == 0 {
-            // Bare main key: only F1–F24 are safe (apps rarely bind them all,
-            // and they never produce text input).
+            // Bare main key: only F1–F24 and the mouse side buttons are safe
+            // (neither produces text input; everything else would hijack
+            // normal typing / shortcuts system-wide).
             let is_fkey = (0x70..=0x87).contains(&vk);
-            if !is_fkey {
+            let is_mouse = vk == VK_XBUTTON1.0 || vk == VK_XBUTTON2.0;
+            if !is_fkey && !is_mouse {
                 return Err(
-                    "字母/数字/普通键作主键时必须搭配至少一个修饰键（ctrl/alt/shift/win）；无修饰键时仅支持 F1-F24"
+                    "字母/数字/普通键作主键时必须搭配至少一个修饰键（ctrl/alt/shift/win）；无修饰键时仅支持 F1-F24 与鼠标侧键（mouse4/mouse5）"
                         .into(),
                 );
             }
@@ -304,6 +325,8 @@ fn key_to_vk(name: &str) -> Option<u16> {
 /// Reverse mapping, only used for logging / panel display.
 fn vk_to_name(vk: u16) -> String {
     match vk {
+        0x05 => "mouse4".into(),
+        0x06 => "mouse5".into(),
         0xA2 => "lctrl".into(),
         0xA3 => "rctrl".into(),
         0xA4 => "lalt".into(),
@@ -415,6 +438,29 @@ pub fn update_settings(new: Settings) {
             new.mode.as_str()
         ));
     }
+
+    // Ask the pump thread to reconcile the mouse hook with the new combo
+    // (hooks must be installed/uninstalled on the thread whose message loop
+    // dispatches them). Best effort — if the thread isn't up yet, it reads
+    // the current settings when it starts and installs accordingly.
+    let tid = HOOK_TID.load(Ordering::SeqCst);
+    if tid != 0 {
+        let _ = unsafe { PostThreadMessageW(tid, WM_APP_REHOOK, WPARAM(0), LPARAM(0)) };
+    }
+}
+
+/// Private WM_APP message: "re-evaluate whether WH_MOUSE_LL is needed".
+const WM_APP_REHOOK: u32 = WM_APP + 1;
+
+/// Install WH_MOUSE_LL from the pump thread; None + log on failure.
+unsafe fn install_mouse_hook() -> Option<HHOOK> {
+    match unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), None, 0) } {
+        Ok(h) => Some(h),
+        Err(e) => {
+            crate::log_error(&format!("SetWindowsHookExW(WH_MOUSE_LL) failed: {e}"));
+            None
+        }
+    }
 }
 
 pub fn start_hotkey_thread(sm: TimeWindowStateMachine, audio: AudioEngine, settings: Settings) {
@@ -427,13 +473,13 @@ pub fn start_hotkey_thread(sm: TimeWindowStateMachine, audio: AudioEngine, setti
 
     let handle = std::thread::spawn(|| unsafe {
         // Register the thread id and force message-queue creation *before*
-        // installing the hook, so a later PostThreadMessageW (shutdown) can
-        // always reach this thread.
+        // installing the hooks, so a later PostThreadMessageW (shutdown /
+        // rehook) can always reach this thread.
         HOOK_TID.store(GetCurrentThreadId(), Ordering::SeqCst);
         let mut warm = MSG::default();
         let _ = PeekMessageW(&mut warm, None, 0, 0, PM_NOREMOVE);
 
-        let hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), None, 0) {
+        let kb_hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), None, 0) {
             Ok(h) => h,
             Err(e) => {
                 crate::log_error(&format!("SetWindowsHookExW failed: {e}"));
@@ -441,16 +487,37 @@ pub fn start_hotkey_thread(sm: TimeWindowStateMachine, audio: AudioEngine, setti
                 return;
             }
         };
+        // Mouse hook only while the active combo uses a side button — a plain
+        // keyboard combo pays zero per-mouse-event overhead.
+        let mut ms_hook = if read_settings().combo.needs_mouse() {
+            install_mouse_hook()
+        } else {
+            None
+        };
 
         // The hook thread must pump messages, otherwise the system stops
         // delivering low-level hook callbacks (and eventually times the hook
         // out silently). WM_QUIT (posted by `shutdown()`) ends the loop.
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            if msg.message == WM_APP_REHOOK {
+                // Settings changed: reconcile the mouse hook on this thread.
+                if read_settings().combo.needs_mouse() {
+                    if ms_hook.is_none() {
+                        ms_hook = install_mouse_hook();
+                    }
+                } else if let Some(h) = ms_hook.take() {
+                    let _ = UnhookWindowsHookEx(h);
+                }
+                continue;
+            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
-        let _ = UnhookWindowsHookEx(hook);
+        let _ = UnhookWindowsHookEx(kb_hook);
+        if let Some(h) = ms_hook {
+            let _ = UnhookWindowsHookEx(h);
+        }
         HOOK_TID.store(0, Ordering::SeqCst);
     });
 
@@ -533,6 +600,44 @@ pub(crate) unsafe extern "system" fn keyboard_hook(
                 press_edge(settings.mode);
             } else {
                 release_edge(settings.mode);
+            }
+        }
+    }
+    unsafe { CallNextHookEx(None, n_code, w_param, l_param) }
+}
+
+/// Low-level mouse hook — active only while the combo's main key is a side
+/// button (`mouse4`/`mouse5`). Mirrors the keyboard hook's semantics:
+/// trigger on the button's press edge (with the combo's modifiers held),
+/// swallow the button events so the app never sees them (no stray
+/// back/forward navigation), and end push-to-talk on release.
+pub(crate) unsafe extern "system" fn mouse_hook(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
+    if n_code >= 0 {
+        let settings = read_settings();
+        let combo = settings.combo;
+        let msg = w_param.0 as u32;
+        if !combo.is_empty()
+            && combo.needs_mouse()
+            && (msg == WM_XBUTTONDOWN || msg == WM_XBUTTONUP)
+        {
+            let ms = unsafe { &*(l_param.0 as *const MSLLHOOKSTRUCT) };
+            // HIWORD(mouseData) carries XBUTTON1 (1) / XBUTTON2 (2).
+            let vk = match (ms.mouseData >> 16) & 0xFFFF {
+                1 => VK_XBUTTON1.0,
+                2 => VK_XBUTTON2.0,
+                _ => 0,
+            };
+            if vk != 0 && vk == combo.main_vk {
+                if msg == WM_XBUTTONDOWN {
+                    if unsafe { combo.mods_down() } {
+                        SWALLOWED_MAIN.store(true, Ordering::SeqCst);
+                        press_edge(settings.mode);
+                        return LRESULT(1);
+                    }
+                } else if SWALLOWED_MAIN.swap(false, Ordering::SeqCst) {
+                    release_edge(settings.mode);
+                    return LRESULT(1);
+                }
             }
         }
     }
@@ -633,7 +738,29 @@ mod tests {
         assert!(parse_combo("  +  ").is_err());
         assert!(parse_combo("ctrl+nope").is_err());
         assert!(parse_combo("ctrl+a+b").is_err());
-        assert!(parse_combo("mouse4").is_err());
+        assert!(parse_combo("mouse4+mouse5").is_err()); // two main keys
+        assert!(parse_combo("wheel").is_err());
+    }
+
+    #[test]
+    fn mouse_side_buttons_supported() {
+        // Bare side buttons are valid hotkeys (no text input to hijack).
+        let m4 = parse_combo("mouse4").unwrap();
+        assert_eq!(m4.main_vk, 0x05); // VK_XBUTTON1
+        assert!(m4.needs_mouse());
+        assert_eq!(m4.to_string(), "mouse4");
+        // Aliases map to the same buttons.
+        assert_eq!(parse_combo("xbutton1").unwrap(), m4);
+        assert_eq!(parse_combo("back").unwrap(), m4);
+        let m5 = parse_combo("mouse5").unwrap();
+        assert_eq!(m5.main_vk, 0x06); // VK_XBUTTON2
+        assert_eq!(parse_combo("forward").unwrap(), m5);
+        // Combined with modifiers.
+        let c = parse_combo("ctrl+mouse5").unwrap();
+        assert!(c.any_ctrl && c.needs_mouse() && c.main_vk == 0x06);
+        // Keyboard combos never need the mouse hook.
+        assert!(!parse_combo("lctrl+lshift").unwrap().needs_mouse());
+        assert!(!parse_combo("ctrl+shift+f8").unwrap().needs_mouse());
     }
 
     #[test]
